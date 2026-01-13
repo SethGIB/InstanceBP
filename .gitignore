@@ -1,2 +1,4 @@
 .vs
 *.user
+/vc2022/InstanceBP
+x64

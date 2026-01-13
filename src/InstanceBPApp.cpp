@@ -11,20 +11,27 @@ class InstanceBPApp : public App {
   public:
 	void setup() override;
 	void mouseDown( MouseEvent event ) override;
+	void keyDown( KeyEvent e ) override;
 	void update() override;
 	void draw() override;
 
 private:
+	bool mIsRunning = false;
+	float mSimTime = 0;
+
 	CameraPersp mCamera;
 	CameraUi mNavCtrl;
 
 	gl::GlslProgRef mShader;
 	gl::BatchRef mInstancedObjects;
+	gl::VboRef mRgbDataVbo;
 
 	void setupShaders();
 	void setupInstances();
 	void setupCamera();
 
+	void updatePositions();
+	void updateColors();
 };
 
 const unsigned int kWindowWidth = 1000;
@@ -42,6 +49,9 @@ const float kGridDepth = 10.0f;
 const float kPointSize = 0.01f;
 const float kPointRes = 8.0f;
 
+// color time step
+const float kTimeScale = 0.02f;
+
 void InstanceBPApp::setup()
 {
 	setupCamera();
@@ -52,16 +62,43 @@ void InstanceBPApp::mouseDown( MouseEvent event )
 {
 }
 
+void InstanceBPApp::keyDown(KeyEvent e)
+{
+	if (e.getNativeKeyCode() == e.KEY_SPACE)
+	{
+		mIsRunning = true;
+	}
+}
+
 void InstanceBPApp::update()
 {
+	if (mIsRunning)
+	{
+		updatePositions();
+		updateColors();
+		mSimTime++;
+	}
 }
 
 void InstanceBPApp::draw()
 {
 	gl::clear(Color(0, 0, 0));
-	gl::enableDepthRead();
-	gl::setMatrices(mCamera);
-	mInstancedObjects->drawInstanced(kNumX * kNumY * kNumZ);
+	if (mIsRunning)
+	{
+		gl::enableDepthRead();
+		gl::setMatrices(mCamera);
+		gl::pushMatrices();
+		gl::rotate(getElapsedFrames() * (kTimeScale * 0.06f), vec3(0, 1, 0));
+		mInstancedObjects->drawInstanced(kNumX * kNumY * kNumZ);
+		gl::popMatrices();
+	}
+}
+
+void InstanceBPApp::setupCamera()
+{
+	mCamera.setAspectRatio(getWindowAspectRatio());
+	mCamera.lookAt(vec3(0, 3.5f, -7.0f), vec3(0), vec3(0, 1, 0));
+	mNavCtrl = CameraUi(&mCamera, getWindow());
 }
 
 void InstanceBPApp::setupShaders()
@@ -107,13 +144,6 @@ void InstanceBPApp::setupShaders()
 	mShader = gl::GlslProg::create(vert_prog, frag_prog);
 }
 
-void InstanceBPApp::setupCamera()
-{
-	mCamera.setAspectRatio(getWindowAspectRatio());
-	mCamera.lookAt(vec3(0, 0, -7.5f), vec3(0), vec3(0, 1, 0));
-	mNavCtrl = CameraUi(&mCamera, getWindow());
-}
-
 void InstanceBPApp::setupInstances()
 {
 	/*
@@ -135,18 +165,19 @@ void InstanceBPApp::setupInstances()
 
 	vector<vec3> position_data;
 	vector<vec3> color_data;
+	float t = mSimTime * kTimeScale * 0.01f;
 	for (int y = 0; y < kNumY; y++)
 	{
 		float py = lmap((float)y + 0.5f, 0.0f, (float)kNumY, -halfy, halfy);
-		float r = (float)y / kNumY;
+		float r = sin( (float)y * t);
 		for (int z = 0; z < kNumZ; z++)
 		{
 			float pz = lmap((float)z + 0.5f, 0.0f, (float)kNumZ, -halfz, halfz);
-			float g = (float)z / kNumZ;
+			float g =  sin( ((float)z - (float)y ) * t);
 			for (int x = 0; x < kNumX; x++)
 			{
 				float px = lmap((float)x + 0.5f, 0.0f, (float)kNumX, -halfx, halfx);
-				float b = (float)x / kNumX;
+				float b = sin(( (float)z - cos((float)y)) * ((float)x - t));
 				position_data.push_back(vec3(px, py, pz));
 				color_data.push_back(vec3(r, g, b));
 			}
@@ -155,7 +186,7 @@ void InstanceBPApp::setupInstances()
 
 	// 2) Vbo (vertex buffer object) setup
 	gl::VboRef instance_pos_data = gl::Vbo::create(GL_ARRAY_BUFFER, position_data.size() * sizeof(vec3), position_data.data(), GL_DYNAMIC_DRAW);
-	gl::VboRef instance_rgb_data = gl::Vbo::create(GL_ARRAY_BUFFER, color_data.size() * sizeof(vec3), color_data.data(), GL_DYNAMIC_DRAW);
+	mRgbDataVbo = gl::Vbo::create(GL_ARRAY_BUFFER, color_data.size() * sizeof(vec3), color_data.data(), GL_DYNAMIC_DRAW);
 	
 	// 2a) Buffer Layout
 	geom::BufferLayout position_layout;
@@ -167,13 +198,43 @@ void InstanceBPApp::setupInstances()
 	// 3) VboMesh setup
 	gl::VboMeshRef instance_mesh = gl::VboMesh::create(geom::Sphere().radius(kPointSize).subdivisions(kPointRes));
 	instance_mesh->appendVbo(position_layout, instance_pos_data);
-	instance_mesh->appendVbo(color_layout, instance_rgb_data);
+	instance_mesh->appendVbo(color_layout, mRgbDataVbo);
 
 	// 4) Shader/GlslProg Setup ///
 	setupShaders();
 
 	// 5) BatchRef setup
 	mInstancedObjects = gl::Batch::create(instance_mesh, mShader, { {geom::Attrib::CUSTOM_0, "instXYZ"}, {geom::Attrib::CUSTOM_1, "instRGB"} });
+}
+
+void InstanceBPApp::updatePositions()
+{
+	// $$TODO$$
+}
+
+void InstanceBPApp::updateColors()
+{
+	vec3* newRgb = (vec3*)mRgbDataVbo->mapReplace();
+	float t = mSimTime * kTimeScale * 0.01f;
+	for (int y = 0; y < kNumY; y++)
+	{
+		for (int z = 0; z < kNumZ; z++)
+		{
+			for (int x = 0; x < kNumX; x++)
+			{
+				float fx = (float)x;
+				float fy = (float)y;
+				float fz = (float)z;
+
+				float r = lmap(sin((y - z) * t), -1.0f, 1.0f, 0.1f, 0.75f);
+				float g = lmap(sin((z - x) * t), 1.0f, -1.0f, 0.1f, 0.75f);
+				float b = lmap(sin(x * t), -1.0f, 1.0f, 0.1f, 0.75f);
+				vec3 newColor = vec3(r, g, b);
+				*newRgb++ = newColor;
+			}
+		}
+	}
+	mRgbDataVbo->unmap();
 }
 
 void prepareSettings(App::Settings* settings)
